@@ -1,101 +1,147 @@
-<!doctype html>
-<html>
+<!-- ===========================
+File: receiver.html
+Purpose: Custom Cast Web Receiver that renders a 5-ticker TradingView dashboard and listens for updates from sender.
+Host this file at a public HTTPS URL and register it as a Custom Receiver in the Google Cast SDK Console.
+=========================== -->
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Stock Board Receiver</title>
-  <script src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
-  <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  <title>Stock Dashboard Receiver</title>
+  <script defer src="https://www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
   <style>
-    :root { color-scheme: dark; }
-    html, body { margin: 0; background:#0b1220; color:#e5e7eb; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, 'Helvetica Neue', Arial; }
-    #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; padding: 12px; }
-    .card { height: 260px; background: #0f172a; border-radius: 16px; padding: 8px; box-shadow: 0 10px 30px rgba(0,0,0,.2) inset; }
-    .row { display:flex; justify-content:space-between; align-items:center; margin-bottom:4px; }
-    .badge { opacity:.75; font-size:12px; }
+    :root { --bg:#0b1022; --panel:#0e1628; --text:#e5e7eb; --muted:#94a3b8; }
+    html,body { height:100%; margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    .wrap { height:100%; display:flex; flex-direction:column; }
+    header { padding: 16px 24px; display:flex; justify-content:space-between; align-items:center; background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02)); border-bottom:1px solid rgba(255,255,255,0.06); }
+    .tickers { letter-spacing: 1px; font-weight: 700; opacity: 0.9; }
+    .clock { color: var(--muted); font-weight:600; }
+    main { flex:1; padding: 12px; display:grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 12px; }
+    .one { grid-column: span 3; height: 48%; }
+    .widget { background: var(--panel); border-radius: 16px; padding: 6px; overflow:hidden; }
+    footer { text-align:center; padding: 8px; color: var(--muted); font-size: 12px; }
+    @media (max-aspect-ratio: 16/10) { main { grid-template-columns: 1fr; grid-template-rows: repeat(5, 1fr); } .one { grid-column: span 1; height:auto; }
+    }
   </style>
 </head>
 <body>
-  <div id="grid"></div>
+  <div class="wrap">
+    <header>
+      <div class="tickers" id="tickerList">AAPL • MSFT • NVDA • GOOGL • AMZN</div>
+      <div class="clock" id="clock">--:--:--</div>
+    </header>
+    <main id="grid">
+      <!-- widgets injected here -->
+    </main>
+    <footer>Data & charts by TradingView (for display only)</footer>
+  </div>
+
   <script>
+    const NAMESPACE = 'urn:x-cast:ticker.dashboard';
+    const DEFAULT_TICKERS = ['AAPL','MSFT','NVDA','GOOGL','AMZN'];
+
     const context = cast.framework.CastReceiverContext.getInstance();
-    const messageBus = context.getCastMessageBus('urn:x-cast:app.stocks');
+    const channel = new cast.framework.system.EventChannel(NAMESPACE);
 
-    const state = {
-      tickers: ['AAPL','MSFT','GOOGL','AMZN','NVDA'],
-      apiKey: null,
-      interval: 'DAILY' // 'DAILY' | 'INTRADAY'
-    };
-
-    const grid = document.getElementById('grid');
-
-    async function fetchSeries(symbol, apiKey, interval='DAILY') {
-      const fn = interval === 'INTRADAY' ? 'TIME_SERIES_INTRADAY&interval=5min' : 'TIME_SERIES_DAILY_ADJUSTED';
-      const url = `https://www.alphavantage.co/query?function=${fn}&symbol=${encodeURIComponent(symbol)}&apikey=${apiKey}`;
-      const res = await fetch(url);
-      const data = await res.json();
-      const key = interval==='INTRADAY' ? 'Time Series (5min)' : 'Time Series (Daily)';
-      const ts = data[key] || {};
-      const points = Object.keys(ts).slice(0, 180).reverse().map(d => {
-        const o = ts[d];
-        return {
-          time: Math.floor(new Date(d).getTime()/1000),
-          open: +o['1. open'],
-          high: +o['2. high'],
-          low: +o['3. low'],
-          close: +o['4. close']
-        };
-      });
-      return points;
+    function startClock(){
+      const el = document.getElementById('clock');
+      const upd = () => { el.textContent = new Date().toLocaleTimeString(); };
+      upd(); setInterval(upd, 1000);
     }
 
-    function makeCard(sym) {
-      const wrap = document.createElement('div');
-      wrap.className = 'card';
-      wrap.innerHTML = `
-        <div class="row"><strong>${sym}</strong><span id="status-${sym}" class="badge">loading…</span></div>
-        <div id="chart-${sym}" style="width:100%;height:210px;"></div>
-      `;
-      grid.appendChild(wrap);
-      const chart = LightweightCharts.createChart(document.getElementById(`chart-${sym}`), {
-        layout:{ background:{ type:'solid', color:'#0f172a' }, textColor:'#cbd5e1' },
-        grid:{ vertLines:{ color:'#182235' }, horzLines:{ color:'#182235' } },
-        rightPriceScale:{ borderVisible:false }, timeScale:{ borderVisible:false }
-      });
-      const series = chart.addCandlestickSeries();
-      return { chart, series };
+    function setTickerHeader(arr){
+      document.getElementById('tickerList').textContent = arr.join(' • ');
+      document.title = `Stocks: ${arr.join(' / ')}`;
     }
 
-    async function render() {
+    function renderWidgets(tickers){
+      const grid = document.getElementById('grid');
       grid.innerHTML = '';
-      const apiKey = state.apiKey || 'demo'; // 'demo' works only for MSFT
-      for (const sym of state.tickers.slice(0,5)) {
-        const { series } = makeCard(sym);
-        try {
-          const data = await fetchSeries(sym, apiKey, state.interval);
-          const status = document.getElementById(`status-${sym}`);
-          if (data.length) { series.setData(data); status.textContent = `${data.length} pts`; }
-          else { status.textContent = 'no data'; }
-        } catch (e) {
-          const status = document.getElementById(`status-${sym}`);
-          status.textContent = 'error';
-        }
-        await new Promise(r => setTimeout(r, 1200)); // be gentle with free API limits
-      }
+      // First widget: multi-symbol overview across the top
+      const top = document.createElement('div');
+      top.className = 'widget one';
+      top.innerHTML = `<div class="tradingview-widget-container" style="height:100%"><div class="tradingview-widget-container__widget"></div></div>`;
+      grid.appendChild(top);
+
+      const topScript = document.createElement('script');
+      topScript.src = 'https://s3.tradingview.com/external-embedding/embed-widget-symbol-overview.js';
+      topScript.async = true;
+      topScript.innerHTML = JSON.stringify({
+        symbols: tickers.map(t => [t]),
+        chartOnly: false,
+        width: '100%',
+        height: '100%',
+        locale: 'en',
+        colorTheme: 'dark',
+        autosize: true,
+        showVolume: false,
+        showMA: false,
+        hideDateRanges: false,
+        hideMarketStatus: false,
+        hideSymbolLogo: false,
+        scalePosition: 'right',
+        scaleMode: 'Normal',
+        fontFamily: 'inherit',
+        gridLineColor: 'rgba(42, 46, 57, 0.06)',
+        backgroundColor: 'rgba(14,22,40,1)',
+        noTimeScale: false,
+        chartType: 'area',
+        lineWidth: 2,
+        widgetFontColor: '#e5e7eb',
+      });
+      top.querySelector('.tradingview-widget-container').appendChild(topScript);
+
+      // Individual mini charts below (up to 4; if more than 4 tickers, we still show first 4 here)
+      const minis = tickers.slice(0, 4);
+      minis.forEach(sym => {
+        const cell = document.createElement('div');
+        cell.className = 'widget';
+        cell.innerHTML = `<div class="tradingview-widget-container" style="height:100%"><div class="tradingview-widget-container__widget"></div></div>`;
+        grid.appendChild(cell);
+
+        const s = document.createElement('script');
+        s.src = 'https://s3.tradingview.com/external-embedding/embed-widget-mini-symbol-overview.js';
+        s.async = true;
+        s.innerHTML = JSON.stringify({
+          symbol: sym,
+          width: '100%',
+          height: '100%',
+          locale: 'en',
+          dateRange: '1D',
+          colorTheme: 'dark',
+          isTransparent: true,
+          autosize: true,
+          largeChartUrl: '',
+          noTimeScale: false
+        });
+        cell.querySelector('.tradingview-widget-container').appendChild(s);
+      });
     }
 
-    messageBus.onMessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data);
-        if (msg.tickers) state.tickers = msg.tickers.map(s => s.toUpperCase());
-        if (msg.apiKey) state.apiKey = msg.apiKey;
-        if (msg.interval) state.interval = msg.interval;
-        render();
-      } catch (_) {}
-    };
+    function applyTickers(tickers){
+      if(!Array.isArray(tickers) || tickers.length === 0) tickers = DEFAULT_TICKERS;
+      tickers = tickers.slice(0,5).map(s => String(s).trim().toUpperCase()).filter(Boolean);
+      setTickerHeader(tickers);
+      renderWidgets(tickers);
+    }
 
+    // Listen for custom messages from the sender
+    context.addCustomMessageListener(NAMESPACE, (event) => {
+      try {
+        const data = event.data || {};
+        applyTickers(data.tickers);
+      } catch(err){
+        // ignore malformed messages
+      }
+    });
+
+    // Start the receiver
     context.start();
-    render();
+
+    // Initial render
+    startClock();
+    applyTickers(DEFAULT_TICKERS);
   </script>
 </body>
 </html>
